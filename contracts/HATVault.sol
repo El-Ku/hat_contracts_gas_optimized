@@ -149,11 +149,12 @@ contract HATVault is IHATVault, ERC4626Upgradeable, OwnableUpgradeable, Reentran
     }
 
     modifier noSafetyPeriod() {
-        uint256 withdrawPeriod = registry.getwithdrawPeriod();
+        HATVaultsRegistry reg = registry;
+        uint256 withdrawPeriod = reg.getwithdrawPeriod();
         // disable withdraw for safetyPeriod (e.g 1 hour) after each withdrawPeriod(e.g 11 hours)
         // solhint-disable-next-line not-rely-on-time
         if (block.timestamp %
-        (withdrawPeriod + registry.getsafetyPeriod()) >=
+        (withdrawPeriod + reg.getsafetyPeriod()) >=
             withdrawPeriod) revert SafetyPeriod();
         _;
     }
@@ -203,10 +204,11 @@ contract HATVault is IHATVault, ERC4626Upgradeable, OwnableUpgradeable, Reentran
     /** @notice See {IHATVault-submitClaim}. */
     function submitClaim(address _beneficiary, uint256 _bountyPercentage, string calldata _descriptionHash)
         external onlyCommittee noActiveClaim notEmergencyPaused returns (bytes32 claimId) {
-        uint256 withdrawPeriod = registry.getwithdrawPeriod();
+        HATVaultsRegistry reg = registry;
+        uint256 withdrawPeriod = reg.getwithdrawPeriod();
         // require we are in safetyPeriod
         // solhint-disable-next-line not-rely-on-time
-        if (block.timestamp % (withdrawPeriod + registry.getsafetyPeriod()) <
+        if (block.timestamp % (withdrawPeriod + reg.getsafetyPeriod()) <
             withdrawPeriod) revert NotSafetyPeriod();
         if (_bountyPercentage > maxBounty)
             revert BountyPercentageHigherThanMaxBounty();
@@ -320,8 +322,9 @@ contract HATVault is IHATVault, ERC4626Upgradeable, OwnableUpgradeable, Reentran
 
         // send to the registry the amount of tokens which should be swapped 
         // to HAT so it could call swapAndSend in a separate tx.
-        asset.safeApprove(address(registry), claimBounty.hackerHatVested + claimBounty.governanceHat);
-        registry.addTokensToSwap(
+        HATVaultsRegistry reg = registry;
+        asset.safeApprove(address(reg), claimBounty.hackerHatVested + claimBounty.governanceHat);
+        reg.addTokensToSwap(
             asset,
             claim.beneficiary,
             claimBounty.hackerHatVested,
@@ -329,7 +332,7 @@ contract HATVault is IHATVault, ERC4626Upgradeable, OwnableUpgradeable, Reentran
         );
 
         // make sure to reset approval
-        asset.safeApprove(address(registry), 0);
+        asset.safeApprove(address(reg), 0);
 
         emit ApproveClaim(
             _claimId,
@@ -756,11 +759,12 @@ contract HATVault is IHATVault, ERC4626Upgradeable, OwnableUpgradeable, Reentran
         internal view
         returns(bool)
     {
-        uint256 withdrawPeriod = registry.getwithdrawPeriod();
+        HATVaultsRegistry reg = registry;
+        uint256 withdrawPeriod = reg.getwithdrawPeriod();
         // disable withdraw for safetyPeriod (e.g 1 hour) after each withdrawPeriod (e.g 11 hours)
         // solhint-disable-next-line not-rely-on-time
         if (block.timestamp %
-        (withdrawPeriod + registry.getsafetyPeriod()) >=
+        (withdrawPeriod + reg.getsafetyPeriod()) >=
             withdrawPeriod) return false;
         // check that withdrawRequestPendingPeriod had passed
         // solhint-disable-next-line not-rely-on-time
@@ -771,7 +775,7 @@ contract HATVault is IHATVault, ERC4626Upgradeable, OwnableUpgradeable, Reentran
         // solhint-disable-next-line not-rely-on-time
             block.timestamp <
                 withdrawEnableStartTime[_user] +
-                registry.getwithdrawRequestEnablePeriod());
+                reg.getwithdrawRequestEnablePeriod());
     }
 
     /**
