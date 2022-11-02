@@ -63,9 +63,10 @@ contract HATVault is IHATVault, ERC4626Upgradeable, OwnableUpgradeable, Reentran
         uint256 bountyGovernanceHAT;
         uint256 bountyHackerHATVested;
         address arbitrator;
+        bool arbitratorCanChangeBounty;
         uint256 challengePeriod;
         uint256 challengeTimeOutPeriod;
-        bool arbitratorCanChangeBounty;
+        
     }
 
     struct PendingMaxBounty {
@@ -148,12 +149,12 @@ contract HATVault is IHATVault, ERC4626Upgradeable, OwnableUpgradeable, Reentran
     }
 
     modifier noSafetyPeriod() {
-        IHATVaultsRegistry.GeneralParameters memory generalParameters = registry.getGeneralParameters();
+        uint256 withdrawPeriod = registry.getwithdrawPeriod();
         // disable withdraw for safetyPeriod (e.g 1 hour) after each withdrawPeriod(e.g 11 hours)
         // solhint-disable-next-line not-rely-on-time
         if (block.timestamp %
-        (generalParameters.withdrawPeriod + generalParameters.safetyPeriod) >=
-            generalParameters.withdrawPeriod) revert SafetyPeriod();
+        (withdrawPeriod + registry.getsafetyPeriod()) >=
+            withdrawPeriod) revert SafetyPeriod();
         _;
     }
 
@@ -202,14 +203,16 @@ contract HATVault is IHATVault, ERC4626Upgradeable, OwnableUpgradeable, Reentran
     /** @notice See {IHATVault-submitClaim}. */
     function submitClaim(address _beneficiary, uint256 _bountyPercentage, string calldata _descriptionHash)
         external onlyCommittee noActiveClaim notEmergencyPaused returns (bytes32 claimId) {
-        IHATVaultsRegistry.GeneralParameters memory generalParameters = registry.getGeneralParameters();
+        uint256 withdrawPeriod = registry.getwithdrawPeriod();
         // require we are in safetyPeriod
         // solhint-disable-next-line not-rely-on-time
-        if (block.timestamp % (generalParameters.withdrawPeriod + generalParameters.safetyPeriod) <
-        generalParameters.withdrawPeriod) revert NotSafetyPeriod();
+        if (block.timestamp % (withdrawPeriod + registry.getsafetyPeriod()) <
+            withdrawPeriod) revert NotSafetyPeriod();
         if (_bountyPercentage > maxBounty)
             revert BountyPercentageHigherThanMaxBounty();
-        claimId = keccak256(abi.encodePacked(address(this), nonce++));
+        unchecked {
+            claimId = keccak256(abi.encodePacked(address(this), nonce++));
+        }        
         activeClaim = Claim({
             claimId: claimId,
             beneficiary: _beneficiary,
@@ -340,15 +343,15 @@ contract HATVault is IHATVault, ERC4626Upgradeable, OwnableUpgradeable, Reentran
 
     /** @notice See {IHATVault-dismissClaim}. */
     function dismissClaim(bytes32 _claimId) external isActiveClaim(_claimId) {
-        Claim memory claim = activeClaim;
-
+        uint256 challengeTimeOutPeriodCached = activeClaim.challengeTimeOutPeriod;
+        uint256 challengedAtCached = activeClaim.challengedAt;
         // solhint-disable-next-line not-rely-on-time
-        if (block.timestamp < claim.createdAt + claim.challengePeriod + claim.challengeTimeOutPeriod) {
-            if (claim.challengedAt == 0) revert OnlyCallableIfChallenged();
+        if (block.timestamp < activeClaim.createdAt + activeClaim.challengePeriod + challengeTimeOutPeriodCached) {
+            if (challengedAtCached == 0) revert OnlyCallableIfChallenged();
             if (
                 // solhint-disable-next-line not-rely-on-time
-                block.timestamp < claim.challengedAt + claim.challengeTimeOutPeriod && 
-                msg.sender != claim.arbitrator
+                block.timestamp < challengedAtCached + challengeTimeOutPeriodCached && 
+                msg.sender != activeClaim.arbitrator
             ) revert OnlyCallableByArbitratorOrAfterChallengeTimeOutPeriod();
         } // else the claim is expired and should be dismissed
         delete activeClaim;
@@ -406,22 +409,23 @@ contract HATVault is IHATVault, ERC4626Upgradeable, OwnableUpgradeable, Reentran
         pendingMaxBounty.maxBounty = _maxBounty;
         // solhint-disable-next-line not-rely-on-time
         pendingMaxBounty.timestamp = block.timestamp;
-        emit SetPendingMaxBounty(_maxBounty, pendingMaxBounty.timestamp);
+        emit SetPendingMaxBounty(_maxBounty, block.timestamp);
     }
 
     /** @notice See {IHATVault-setMaxBounty}. */
     function setMaxBounty() external onlyOwner noActiveClaim {
         if (pendingMaxBounty.timestamp == 0) revert NoPendingMaxBounty();
 
-        IHATVaultsRegistry.GeneralParameters memory generalParameters = registry.getGeneralParameters();
+        uint256 setMaxBountyDelay = registry.getsetMaxBountyDelay();
 
         // solhint-disable-next-line not-rely-on-time
         if (block.timestamp - pendingMaxBounty.timestamp <
-            generalParameters.setMaxBountyDelay)
+            setMaxBountyDelay)
             revert DelayPeriodForSettingMaxBountyHadNotPassed();
-        maxBounty = pendingMaxBounty.maxBounty;
+        uint256 maxBountyCached = pendingMaxBounty.maxBounty;
+        maxBounty = maxBountyCached;
         delete pendingMaxBounty;
-        emit SetMaxBounty(maxBounty);
+        emit SetMaxBounty(maxBountyCached);
     }
 
     /** @notice See {IHATVault-setDepositPause}. */
@@ -493,11 +497,15 @@ contract HATVault is IHATVault, ERC4626Upgradeable, OwnableUpgradeable, Reentran
 
     /** @notice See {IHATVault-withdrawRequest}. */
     function withdrawRequest() external nonReentrant {
-        IHATVaultsRegistry.GeneralParameters memory generalParameters = registry.getGeneralParameters();
+        uint256 withdrawRequestPendingPeriod = registry.getwithdrawRequestPendingPeriod();
         // set the withdrawEnableStartTime time to be withdrawRequestPendingPeriod from now
         // solhint-disable-next-line not-rely-on-time
-        withdrawEnableStartTime[msg.sender] = block.timestamp + generalParameters.withdrawRequestPendingPeriod;
-        emit WithdrawRequest(msg.sender, withdrawEnableStartTime[msg.sender]);
+        uint256 temp;
+        unchecked {
+            temp = block.timestamp + withdrawRequestPendingPeriod;        
+        }
+        withdrawEnableStartTime[msg.sender] = temp;
+        emit WithdrawRequest(msg.sender, temp);
     }
 
     /** @notice See {IHATVault-withdrawAndClaim}. */
@@ -711,9 +719,8 @@ contract HATVault is IHATVault, ERC4626Upgradeable, OwnableUpgradeable, Reentran
             // Cannot transfer or mint tokens to a user for which an active withdraw request exists
             // because then we would need to reset their withdraw request
             if (withdrawEnableStartTime[to] != 0) {
-                IHATVaultsRegistry.GeneralParameters memory generalParameters = registry.getGeneralParameters();
                 // solhint-disable-next-line not-rely-on-time
-                if (block.timestamp < withdrawEnableStartTime[to] + generalParameters.withdrawRequestEnablePeriod)
+                if (block.timestamp < withdrawEnableStartTime[to] + registry.getwithdrawRequestEnablePeriod())
                     revert CannotTransferToAnotherUserWithActiveWithdrawRequest();
             }
             rewardController.commitUserBalance(to, amount, true);
@@ -749,12 +756,12 @@ contract HATVault is IHATVault, ERC4626Upgradeable, OwnableUpgradeable, Reentran
         internal view
         returns(bool)
     {
-        IHATVaultsRegistry.GeneralParameters memory generalParameters = registry.getGeneralParameters();
+        uint256 withdrawPeriod = registry.getwithdrawPeriod();
         // disable withdraw for safetyPeriod (e.g 1 hour) after each withdrawPeriod (e.g 11 hours)
         // solhint-disable-next-line not-rely-on-time
         if (block.timestamp %
-        (generalParameters.withdrawPeriod + generalParameters.safetyPeriod) >=
-            generalParameters.withdrawPeriod) return false;
+        (withdrawPeriod + registry.getsafetyPeriod()) >=
+            withdrawPeriod) return false;
         // check that withdrawRequestPendingPeriod had passed
         // solhint-disable-next-line not-rely-on-time
         return (block.timestamp >= withdrawEnableStartTime[_user] &&
@@ -764,7 +771,7 @@ contract HATVault is IHATVault, ERC4626Upgradeable, OwnableUpgradeable, Reentran
         // solhint-disable-next-line not-rely-on-time
             block.timestamp <
                 withdrawEnableStartTime[_user] +
-                generalParameters.withdrawRequestEnablePeriod);
+                registry.getwithdrawRequestEnablePeriod());
     }
 
     /**
